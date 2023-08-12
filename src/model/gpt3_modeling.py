@@ -18,7 +18,7 @@
 import torch
 import torch.nn.functional as F
 
-from src import mpu
+from ru_gpts.src import mpu
 
 
 def init_method_normal(std=0.02):

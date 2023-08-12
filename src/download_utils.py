@@ -1,5 +1,5 @@
 import os
-from transformers.utils import logging
+from transformers import logging
 from huggingface_hub import hf_hub_download
 
 

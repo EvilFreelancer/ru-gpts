@@ -19,7 +19,7 @@ import torch.distributed as dist
 from torch.nn.modules import Module
 from torch.autograd import Variable
 
-from src import mpu
+from ru_gpts.src import mpu
 
 
 class DistributedDataParallel(Module):

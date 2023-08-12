@@ -18,7 +18,7 @@
 import argparse
 import os
 import torch
-from src.utils import DEEPSPEED_WRAP
+from ru_gpts.src.utils import DEEPSPEED_WRAP
 
 
 def add_model_config_args(parser):

@@ -24,7 +24,7 @@ from .layers import ColumnParallelLinear
 from .layers import RowParallelLinear
 from .utils import divide
 from .utils import split_tensor_along_last_dim
-from src.utils import DEEPSPEED_WRAP
+from ru_gpts.src.utils import DEEPSPEED_WRAP
 
 
 class GPT3ParallelSelfAttention(torch.nn.Module):
@@ -62,7 +62,7 @@ class GPT3ParallelSelfAttention(torch.nn.Module):
         self.use_deepspeed_sparse = use_deepspeed_sparse
         if DEEPSPEED_WRAP:
             deepspeed = DEEPSPEED_WRAP.deepspeed
-            from deepspeed.ops.sparse_attention import SparseSelfAttention
+        from deepspeed.ops.sparse_attention import SparseSelfAttention
         if self.use_deepspeed_sparse is not None:
             self.sparse_self_attention = SparseSelfAttention(self.use_deepspeed_sparse)
         # Set output layer initialization if not provided.

@@ -18,9 +18,9 @@ import os
 import torch
 from torch.utils.data import BatchSampler, DataLoader
 
-from src import mpu
-from src.dataset_rugpt3 import RuGpt3TextDataset, RuGpt3DatasetArguments
-from src.utils import print_rank_0
+from ru_gpts.src import mpu
+from ru_gpts.src.dataset_rugpt3 import RuGpt3TextDataset, RuGpt3DatasetArguments
+from ru_gpts.src.utils import print_rank_0
 from transformers import GPT2Tokenizer
 
 

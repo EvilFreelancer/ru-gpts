@@ -10,11 +10,11 @@ from deepspeed import DeepSpeedConfig
 from torch.nn import CrossEntropyLoss
 from transformers import GPT2Tokenizer, PreTrainedModel, PretrainedConfig
 
-from src import mpu
+from ru_gpts.src import mpu
 from .fp16 import FP16_Module
 from .model import GPT3Model
 from .download_utils import download_model_files, DEEPSPEED_CONFIG_NAME, hf_hub_download
-from transformers.utils import logging
+from transformers import logging
 
 
 logger = logging.get_logger(__name__)
@@ -53,11 +53,7 @@ def get_sparse_attention_config(path, num_heads):
 def get_model(deepspeed_config_path):
     num_local_heads = 16
     sparse_mode = 'alternating'
-    deepspeed_sparsity_config = get_sparse_attention_config(deepspeed_config_path, num_local_heads)
-    if deepspeed_sparsity_config is not None:
-        logger.info(f"Use sparse attention with mode {sparse_mode}")
-    else:
-        logger.info(f"Use dense attention")
+    logger.info(f"Use dense attention")
     model = GPT3Model(num_layers=24,
                       vocab_size=50264,
                       hidden_size=2048,
@@ -67,7 +63,6 @@ def get_model(deepspeed_config_path):
                       checkpoint_activations=False,
                       checkpoint_num_layers=1,
                       parallel_output=False,
-                      deepspeed_sparsity_config=deepspeed_sparsity_config,
                       sparse_mode=sparse_mode)
     # GPU allocation.
     model.cuda(torch.cuda.current_device())

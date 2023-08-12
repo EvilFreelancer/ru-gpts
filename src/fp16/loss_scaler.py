@@ -15,7 +15,7 @@
 
 import torch
 
-from src import mpu
+from ru_gpts.src import mpu
 
 
 # item() is a recent addition, so this helps with backward compatibility.

@@ -23,11 +23,11 @@ import numpy as np
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
 
-from src import mpu
-from src.fp16 import FP16_Optimizer, FP16_Module
-from src.model import DistributedDataParallel as DDP
+from ru_gpts.src import mpu
+from ru_gpts.src.fp16 import FP16_Optimizer, FP16_Module
+from ru_gpts.src.model import DistributedDataParallel as DDP
 import os
-from src.download_utils import download_model_files
+from ru_gpts.src.download_utils import download_model_files
 
 
 class DeepSpeedImportWrap(object):
