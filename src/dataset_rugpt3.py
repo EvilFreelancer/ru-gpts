@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-logger = logging.getLogger(__name__)
+logger = logging.get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 
