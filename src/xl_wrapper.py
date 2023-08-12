@@ -17,7 +17,7 @@ from .download_utils import download_model_files, DEEPSPEED_CONFIG_NAME, hf_hub_
 from transformers import logging
 
 
-logger = logging.get_logger(__name__)
+logger = logging.getLogger(__name__)
 NoneType = type(None)
 
 
