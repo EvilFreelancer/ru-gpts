@@ -1,9 +1,9 @@
 import os
-from transformers import logging
+import logging
 from huggingface_hub import hf_hub_download
 
 
-logger = logging.get_logger(__name__)
+logger = logging.getLogger(__name__)
 WEIGHTS_NAME = "mp_rank_00_model_states.pt"
 DEEPSPEED_CONFIG_NAME = "deepspeed_config.json"
 

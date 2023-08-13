@@ -40,7 +40,7 @@ else:
     # from torch.optim.lr_scheduler import SAVE_STATE_WARNING
     SAVE_STATE_WARNING = ""
 
-logger = logging.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def torch_pad_and_concatenate(tensor1, tensor2, padding_index=-100):

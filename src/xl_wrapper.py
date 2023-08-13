@@ -14,10 +14,10 @@ from ru_gpts.src import mpu
 from .fp16 import FP16_Module
 from .model import GPT3Model
 from .download_utils import download_model_files, DEEPSPEED_CONFIG_NAME, hf_hub_download
-from transformers import logging
+import logging
 
 
-logger = logging.get_logger(__name__)
+logger = logging.getLogger(__name__)
 NoneType = type(None)
 
 
