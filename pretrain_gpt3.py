@@ -26,22 +26,22 @@ import torch.distributed as dist
 from apex.optimizers import FusedAdam as Adam
 from torch.utils.tensorboard import SummaryWriter
 
-from src import mpu
-from src.arguments import get_args
-from src.fp16 import FP16_Module
-from src.fp16 import FP16_Optimizer
-from src.gpt3_data_loader import make_gpt3_dataloaders
-from src.learning_rates import AnnealingLR
-from src.model import GPT3Model
-from src.model import gpt3_get_params_for_weight_decay_optimization
-from src.utils import (
+from ru_gpts.src import mpu
+from ru_gpts.src.arguments import get_args
+from ru_gpts.src.fp16 import FP16_Module
+from ru_gpts.src.fp16 import FP16_Optimizer
+from ru_gpts.src.gpt3_data_loader import make_gpt3_dataloaders
+from ru_gpts.src.learning_rates import AnnealingLR
+from ru_gpts.src.model import GPT3Model
+from ru_gpts.src.model import gpt3_get_params_for_weight_decay_optimization
+from ru_gpts.src.utils import (
     Timers, report_memory,
     save_checkpoint, load_checkpoint, load_huggingface_model,
     print_args, print_rank_0,
     get_sparse_attention_config, top_k_logits, DEEPSPEED_WRAP
 )
 from huggingface_hub import hf_hub_download
-from src.download_utils import WEIGHTS_NAME
+from ru_gpts.src.download_utils import WEIGHTS_NAME
 
 # Flag to use Pytorch ddp which uses overlapping communication and computation.
 USE_TORCH_DDP = False
