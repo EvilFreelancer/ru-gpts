@@ -314,63 +314,51 @@ def load_checkpoint(model, optimizer, lr_scheduler, args, deepspeed=False):
     if not success:
         return 0
 
-    if deepspeed:
-        load_optim = not args.no_load_optim
-        checkpoint_name, sd = model.load_checkpoint(args.load, iteration, load_optimizer_states=load_optim,
-                                                    load_lr_scheduler_states=load_optim)
+    # Checkpoint.
+    checkpoint_name = get_checkpoint_name(args.load, iteration, release)
 
-        if checkpoint_name is None:
-            if mpu.get_data_parallel_rank() == 0:
-                print("Unable to load checkpoint.")
-            return iteration
-
+    # Load the checkpoint.
+    if os.path.isfile(checkpoint_name):
+        sd = torch.load(checkpoint_name, map_location='cpu')
     else:
+        # Try load deepspeed checkpoint with only megatron
+        checkpoint_name = os.path.join(
+            args.load, str(iteration),
+            'mp_rank_{:02d}_model_states.pt'.format(mpu.get_model_parallel_rank())
+        )
+        sd = torch.load(checkpoint_name, map_location='cpu')
 
-        # Checkpoint.
-        checkpoint_name = get_checkpoint_name(args.load, iteration, release)
+    if mpu.get_data_parallel_rank() == 0:
+        print('global rank {} is loading checkpoint {}'.format(
+            torch.distributed.get_rank(), checkpoint_name))
 
-        # Load the checkpoint.
-        if os.path.isfile(checkpoint_name):
-            sd = torch.load(checkpoint_name, map_location='cpu')
-        else:
-            # Try load deepspeed checkpoint with only megatron
-            checkpoint_name = os.path.join(
-                args.load, str(iteration),
-                'mp_rank_{:02d}_model_states.pt'.format(mpu.get_model_parallel_rank())
-            )
-            sd = torch.load(checkpoint_name, map_location='cpu')
+    if isinstance(model, torchDDP):
+        model = model.module
 
-        if mpu.get_data_parallel_rank() == 0:
-            print('global rank {} is loading checkpoint {}'.format(
-                torch.distributed.get_rank(), checkpoint_name))
-
-        if isinstance(model, torchDDP):
-            model = model.module
-
-        # Model.
+    # Model.
+    try:
+        model.load_state_dict(sd['model'])
+    except KeyError:
         try:
-            model.load_state_dict(sd['model'])
+            model.load_state_dict(sd['module'])
         except KeyError:
-            try:
-                model.load_state_dict(sd['module'])
-            except KeyError:
-                print_rank_0('A metadata file exists but unable to load model '
-                             'from checkpoint {}, exiting'.format(checkpoint_name))
-                exit()
+            print_rank_0('A metadata file exists but unable to load model '
+                         'from checkpoint {}, exiting'.format(checkpoint_name))
+            exit()
 
-        # Optimizer.
-        if not release and not args.finetune and not args.no_load_optim:
-            try:
-                if optimizer is not None:
-                    optimizer.load_state_dict(sd['optimizer'])
-                if lr_scheduler is not None:
-                    lr_scheduler.load_state_dict(sd['lr_scheduler'])
-            except KeyError:
-                print_rank_0('Unable to load optimizer from checkpoint {}, exiting. '
-                             'Specify --no-load-optim or --finetune to prevent '
-                             'attempting to load the optimizer '
-                             'state.'.format(checkpoint_name))
-                exit()
+    # Optimizer.
+    if not release and not args.finetune and not args.no_load_optim:
+        try:
+            if optimizer is not None:
+                optimizer.load_state_dict(sd['optimizer'])
+            if lr_scheduler is not None:
+                lr_scheduler.load_state_dict(sd['lr_scheduler'])
+        except KeyError:
+            print_rank_0('Unable to load optimizer from checkpoint {}, exiting. '
+                         'Specify --no-load-optim or --finetune to prevent '
+                         'attempting to load the optimizer '
+                         'state.'.format(checkpoint_name))
+            exit()
 
     # Iterations.
     if args.finetune or release:

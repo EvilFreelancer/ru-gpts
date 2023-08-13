@@ -25,6 +25,7 @@ from .layers import RowParallelLinear
 from .utils import divide
 from .utils import split_tensor_along_last_dim
 from ru_gpts.src.utils import DEEPSPEED_WRAP
+import torch.utils.checkpoint as checkpoint_utils
 
 
 class GPT3ParallelSelfAttention(torch.nn.Module):
@@ -91,12 +92,6 @@ class GPT3ParallelSelfAttention(torch.nn.Module):
                                        input_is_parallel=True,
                                        init_method=output_layer_init_method)
         self.output_dropout = torch.nn.Dropout(output_dropout_prob)
-
-        if DEEPSPEED_WRAP:
-            if DEEPSPEED_WRAP.deepspeed.checkpointing.is_configured():
-                global get_cuda_rng_tracker, checkpoint
-                get_cuda_rng_tracker = DEEPSPEED_WRAP.deepspeed.checkpointing.get_cuda_rng_tracker
-                checkpoint = deepspeed.checkpointing.checkpoint
 
     def _transpose_for_scores(self, tensor):
         """Transpose a 3D tensor [b, s, np*hn] into a 4D tensor with
@@ -380,19 +375,13 @@ class GPT3ParallelTransformer(torch.nn.Module):
                  sparse_mode='all'):
         super(GPT3ParallelTransformer, self).__init__()
 
-        if DEEPSPEED_WRAP:
-            from deepspeed.ops.sparse_attention import SparseSelfAttention
-
         # Store activation checkpoiting flag.
         self.checkpoint_activations = checkpoint_activations
         self.checkpoint_num_layers = checkpoint_num_layers
 
         output_layer_init_method = None
         if use_scaled_init_for_output_weights:
-            output_layer_init_method = scaled_init_method(init_method_std,
-                                                          num_layers)
-        if use_deepspeed_sparse and sparse_mode == 'alternating':
-            print('Use alternating sparse & dense attention layers')
+            output_layer_init_method = scaled_init_method(init_method_std, num_layers)
 
         def get_layer(layer_num, num_layers):
             sparsity_config = use_deepspeed_sparse
@@ -418,12 +407,6 @@ class GPT3ParallelTransformer(torch.nn.Module):
         # Final layer norm before output.
         self.final_layernorm = LayerNorm(hidden_size, eps=layernorm_epsilon)
 
-        if DEEPSPEED_WRAP:
-            if DEEPSPEED_WRAP.deepspeed.checkpointing.is_configured():
-                global get_cuda_rng_tracker, checkpoint
-                get_cuda_rng_tracker = DEEPSPEED_WRAP.deepspeed.checkpointing.get_cuda_rng_tracker
-                checkpoint = DEEPSPEED_WRAP.deepspeed.checkpointing.checkpoint
-
     def forward(self, hidden_states, attention_mask):
 
         def custom(start, end):
@@ -441,8 +424,8 @@ class GPT3ParallelTransformer(torch.nn.Module):
             num_layers = len(self.layers)
             chunk_length = self.checkpoint_num_layers
             while l < num_layers:
-                hidden_states = checkpoint(custom(l, l + chunk_length),
-                                           hidden_states, attention_mask)
+                hidden_states = checkpoint_utils.checkpoint(custom(l, l + chunk_length),
+                                                            hidden_states, attention_mask)
                 l += chunk_length
         else:
             for layer in self.layers:
@@ -452,3 +435,4 @@ class GPT3ParallelTransformer(torch.nn.Module):
         output = self.final_layernorm(hidden_states)
 
         return output
+

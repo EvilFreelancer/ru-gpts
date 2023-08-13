@@ -38,7 +38,7 @@ from ru_gpts.src.utils import (
     Timers, report_memory,
     save_checkpoint, load_checkpoint, load_huggingface_model,
     print_args, print_rank_0,
-    get_sparse_attention_config, top_k_logits, DEEPSPEED_WRAP
+    top_k_logits
 )
 from huggingface_hub import hf_hub_download
 from ru_gpts.src.download_utils import WEIGHTS_NAME
@@ -56,12 +56,7 @@ def get_model(args):
 
     print_rank_0('building GPT3 model ...')
     assert args.num_attention_heads % args.model_parallel_size == 0
-    num_local_heads = args.num_attention_heads // args.model_parallel_size
-    deepspeed_sparsity_config = None
-    if DEEPSPEED_WRAP and args.deepspeed:
-        deepspeed_sparsity_config = get_sparse_attention_config(args, num_local_heads)
-    if deepspeed_sparsity_config is not None:
-        print_rank_0(f"Use sparse attention with mode {args.sparse_mode}")
+
     model = GPT3Model(num_layers=args.num_layers,
                       vocab_size=args.vocab_size,
                       hidden_size=args.hidden_size,
@@ -73,16 +68,12 @@ def get_model(args):
                       checkpoint_activations=args.checkpoint_activations,
                       checkpoint_num_layers=args.checkpoint_num_layers,
                       parallel_output=True,
-                      deepspeed_sparsity_config=deepspeed_sparsity_config,
                       sparse_mode=args.sparse_mode)
 
     if args.load_huggingface is not None:
-        if args.load_huggingface == "sberbank-ai/rugpt3xl":
-            weights_path = hf_hub_download(args.load_huggingface, WEIGHTS_NAME)
-            checkpoint = torch.load(weights_path, map_location="cpu")['module']
-            model.load_state_dict(checkpoint, strict=False)
-        else:
-            model = load_huggingface_model(model, args.load_huggingface, args.huggingface_double_pos_embeddings)
+        weights_path = hf_hub_download(args.load_huggingface, WEIGHTS_NAME)
+        checkpoint = torch.load(weights_path, map_location="cpu")['module']
+        model.load_state_dict(checkpoint, strict=False)
 
     if mpu.get_data_parallel_rank() == 0:
         print(' > number of parameters on model parallel rank {}: {}'.format(
@@ -90,7 +81,7 @@ def get_model(args):
             sum([p.nelement() for p in model.parameters()])), flush=True)
 
     # To prevent OOM for model sizes that cannot fit in GPU memory in full precision
-    if DEEPSPEED_WRAP and args.deepspeed and args.fp16:
+    if args.fp16:
         model.half()
 
     # GPU allocation.
@@ -126,11 +117,7 @@ def get_optimizer(model, args):
                 param.model_parallel = False
 
     if args.cpu_optimizer:
-        if args.cpu_torch_adam:
-            cpu_adam_optimizer = torch.optim.Adam
-        else:
-            from deepspeed.ops.adam import DeepSpeedCPUAdam
-            cpu_adam_optimizer = DeepSpeedCPUAdam
+        cpu_adam_optimizer = torch.optim.Adam
         optimizer = cpu_adam_optimizer(param_groups,
                                        lr=args.lr, weight_decay=args.weight_decay)
     else:
@@ -139,9 +126,6 @@ def get_optimizer(model, args):
                          lr=args.lr, weight_decay=args.weight_decay)
 
     print(f'Optimizer = {optimizer.__class__.__name__}')
-    if DEEPSPEED_WRAP and args.deepspeed:
-        # fp16 wrapper is not required for DeepSpeed.
-        return optimizer
 
     # Wrap into fp16 optimizer.
     if args.fp16:
@@ -185,21 +169,9 @@ def setup_model_and_optimizer(args):
     optimizer = get_optimizer(model, args)
     lr_scheduler = get_learning_rate_scheduler(optimizer, args)
 
-    if DEEPSPEED_WRAP and args.deepspeed:
-        print_rank_0("DeepSpeed is enabled.")
-
-        model, optimizer, _, lr_scheduler = DEEPSPEED_WRAP.deepspeed.initialize(
-            model=model,
-            optimizer=optimizer,
-            args=args,
-            lr_scheduler=lr_scheduler,
-            mpu=mpu,
-            dist_init_required=False
-        )
-
     if args.load is not None:
         print_rank_0("Load checkpoint from " + args.load)
-        args.iteration = load_checkpoint(model, optimizer, lr_scheduler, args, deepspeed=DEEPSPEED_WRAP and args.deepspeed)
+        args.iteration = load_checkpoint(model, optimizer, lr_scheduler, args)
         print_rank_0("Checkpoint loaded")
     else:
         args.iteration = 0
@@ -342,46 +314,37 @@ def backward_step(optimizer, model, lm_loss, args, timers):
     loss = lm_loss
 
     # Backward pass.
-    if DEEPSPEED_WRAP and args.deepspeed:
-        model.backward(loss)
+    optimizer.zero_grad()
+    if args.fp16:
+        optimizer.backward(loss, update_master_grads=False)
     else:
-        optimizer.zero_grad()
-        if args.fp16:
-            optimizer.backward(loss, update_master_grads=False)
-        else:
-            loss.backward()
+        loss.backward()
 
     # Reduce across processes.
     # lm_loss_reduced = lm_loss
 
     reduced_losses = lm_loss.view(1)
 
-    if DEEPSPEED_WRAP and args.deepspeed:
-        # DeepSpeed backward propagation already addressed all reduce communication.
-        # Reset the timer to avoid breaking timer logs below.
-        timers('allreduce').reset()
-    else:
-        torch.distributed.all_reduce(reduced_losses.data)
-        reduced_losses.data = reduced_losses.data / args.world_size
-        if not USE_TORCH_DDP:
-            timers('allreduce').start()
-            model.allreduce_params(reduce_after=False,
-                                   fp32_allreduce=args.fp32_allreduce)
-            timers('allreduce').stop()
+    torch.distributed.all_reduce(reduced_losses.data)
+    reduced_losses.data = reduced_losses.data / args.world_size
+    if not USE_TORCH_DDP:
+        timers('allreduce').start()
+        model.allreduce_params(reduce_after=False,
+                               fp32_allreduce=args.fp32_allreduce)
+        timers('allreduce').stop()
 
     lm_loss_reduced = reduced_losses
 
     # Update master gradients.
-    if not (DEEPSPEED_WRAP and args.deepspeed):
-        if args.fp16:
-            optimizer.update_master_grads()
+    if args.fp16:
+        optimizer.update_master_grads()
 
-        # Clipping gradients helps prevent the exploding gradient.
-        if args.clip_grad > 0:
-            if not args.fp16:
-                mpu.clip_grad_norm(model.parameters(), args.clip_grad)
-            else:
-                optimizer.clip_master_grads(args.clip_grad)
+    # Clipping gradients helps prevent the exploding gradient.
+    if args.clip_grad > 0:
+        if not args.fp16:
+            mpu.clip_grad_norm(model.parameters(), args.clip_grad)
+        else:
+            optimizer.clip_master_grads(args.clip_grad)
 
     return lm_loss_reduced
 
@@ -423,16 +386,15 @@ def train_step(sample, model, optimizer, lr_scheduler,
     # Update parameters.
     skipped_iter = 0
     timers('optimizer').start()
-    if DEEPSPEED_WRAP and args.deepspeed:
-        model.step()
-    else:
-        optimizer.step()
 
-        # Update learning rate.
-        if not (args.fp16 and optimizer.overflow):
-            lr_scheduler.step()
-        else:
-            skipped_iter = 1
+    optimizer.step()
+
+    # Update learning rate.
+    if not (args.fp16 and optimizer.overflow):
+        lr_scheduler.step()
+    else:
+        skipped_iter = 1
+
     timers('optimizer').stop()
 
     return lm_loss_reduced, skipped_iter
@@ -506,7 +468,7 @@ def train(model, optimizer, lr_scheduler,
                 'Speed/seen_tokens': iteration * (tokens / args.log_interval)
             }
             if args.fp16:
-                lscale = optimizer.cur_scale if DEEPSPEED_WRAP and args.deepspeed else optimizer.loss_scale
+                lscale = optimizer.loss_scale
                 log_string += ' loss scale {:.1f} |'.format(lscale)
                 scalars['lscale'] = lscale
             print_rank_0(log_string)
@@ -535,7 +497,7 @@ def train(model, optimizer, lr_scheduler,
                            normalizer=args.log_interval)
         # Checkpointing
         if args.save and args.save_interval and iteration % args.save_interval == 0:
-            save_checkpoint(iteration, model, optimizer, lr_scheduler, args, deepspeed=DEEPSPEED_WRAP and args.deepspeed)
+            save_checkpoint(iteration, model, optimizer, lr_scheduler, args)
 
         # Evaluation
         if args.eval_interval and iteration % args.eval_interval == 0 and args.do_valid:
@@ -578,13 +540,6 @@ def evaluate(data_iterator, model, args, timers, verbose=False):
             sample = next(data_iterator) if (data_iterator is not None) else None
             lm_loss = forward_step(sample, model, args, timers)
 
-            '''when contiguous memory optimizations are enabled, the buffers
-            allocated by the optimizations are deallocated during backward pass
-            in the absence of backward pass the buffers should be reset after each
-            forward pass'''
-            if DEEPSPEED_WRAP and args.deepspeed and args.deepspeed_activation_checkpointing:
-                DEEPSPEED_WRAP.deepspeed.checkpointing.reset()
-
             # Reduce across processes.
             if isinstance(model, DDP):
                 torch.distributed.all_reduce(lm_loss.data)
@@ -617,30 +572,6 @@ def evaluate_and_print_results(prefix, data_iterator, model,
     return lm_loss, lm_ppl
 
 
-'''
-    Optional DeepSpeed Activation Checkpointing features
-    Gives access to partition activations, contiguous memory optimizations
-    and cpu checkpointing.
-
-    Activation checkpoint requires keep track of the random states
-    and setting the random seed for each MP process. Megatron uses
-    mpu.get_cuda_rng_tracker and mpu.model_parallel_cuda_manual_seed
-    for keeping track of the random states and setting the random seeds.
-    Since they are used in places outside of activation checkpointing,
-    we overwrite them to maintain consistency.
-
-    This must be done before all the calls to mpu.model_parallel_cuda_manual_seed
-    '''
-
-
-def set_deepspeed_activation_checkpointing(args):
-    DEEPSPEED_WRAP.deepspeed.checkpointing.configure(mpu, deepspeed_config=args.deepspeed_config,
-                                                     num_checkpoints=args.num_layers)
-    mpu.checkpoint = DEEPSPEED_WRAP.deepspeed.checkpointing.checkpoint
-    mpu.get_cuda_rng_tracker = DEEPSPEED_WRAP.deepspeed.checkpointing.get_cuda_rng_tracker
-    mpu.model_parallel_cuda_manual_seed = DEEPSPEED_WRAP.deepspeed.checkpointing.model_parallel_cuda_manual_seed
-
-
 def initialize_distributed(args):
     """Initialize torch.distributed."""
 
@@ -661,11 +592,6 @@ def initialize_distributed(args):
 
     # Set the model-parallel / data-parallel communicators.
     mpu.initialize_model_parallel(args.model_parallel_size)
-
-    # Optional DeepSpeed Activation Checkpointing Features
-    #
-    if DEEPSPEED_WRAP and args.deepspeed and args.deepspeed_activation_checkpointing:
-        set_deepspeed_activation_checkpointing(args)
 
 
 def set_random_seed(seed):
@@ -713,7 +639,7 @@ def get_train_val_test_data(args):
     return train_data, val_data, test_data, num_tokens, eod_token, tokenizer
 
 
-def generate(model, tokenizer, raw_text, out_seq_length=256, seq_length=512, temperature=1.0, top_k=0, top_p=0.9):
+def generate(model, tokenizer, raw_text, out_seq_length=256, seq_length=512, temperature=1.0, top_k=0, top_p=0.9, repetition_penalty=2.0, ngram_size=100):
     context_tokens = tokenizer(raw_text)['input_ids']
     context_length = len(context_tokens)
     pad_id = tokenizer.encoder['<pad>']
@@ -738,9 +664,35 @@ def generate(model, tokenizer, raw_text, out_seq_length=256, seq_length=512, tem
     counter = 0
     start_context_length = context_length
 
+    # while counter < (start_context_length + out_seq_length):
+    #     logits = model(tokens, position_ids, attention_mask)
+    #     logits = logits[:, context_length - 1, :] / temperature
+    #
+    #     # Apply repetition penalty
+    #     for token_id in set(tokens[0].tolist()):
+    #         logits[0][token_id] /= repetition_penalty
+
+    banned_ngrams = set()
+
     while counter < (start_context_length + out_seq_length):
         logits = model(tokens, position_ids, attention_mask)
         logits = logits[:, context_length - 1, :] / temperature
+
+        # Apply repetition penalty
+        for token_id in set(tokens[0].tolist()):
+            logits[0][token_id] /= repetition_penalty
+
+        # Apply n-gram ban
+        generated_tokens = tokens[0].tolist()
+        for i in range(len(generated_tokens) - ngram_size + 1):
+            ngram = tuple(generated_tokens[i:i + ngram_size])
+            banned_ngrams.add(ngram)
+
+        for idx in range(logits.size(1)):
+            test_tokens = generated_tokens + [idx]
+            if tuple(test_tokens[-ngram_size:]) in banned_ngrams:
+                logits[0][idx] = float('-inf')
+
         logits = top_k_logits(logits, top_k=top_k, top_p=top_p)
         log_probs = torch.nn.functional.softmax(logits, dim=-1)
         prev = torch.multinomial(log_probs, num_samples=1)
@@ -823,7 +775,7 @@ def main():
                                            model, args, timers, False)
 
     if args.save and iteration != 0:
-        save_checkpoint(iteration, model, optimizer, lr_scheduler, args, deepspeed=DEEPSPEED_WRAP and args.deepspeed)
+        save_checkpoint(iteration, model, optimizer, lr_scheduler, args)
 
     if args.do_test:
         # Run on test data.

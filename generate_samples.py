@@ -19,19 +19,19 @@ import os
 import time
 
 import torch
-from transformers.tokenization_gpt2 import GPT2Tokenizer
+from transformers import GPT2Tokenizer
 
-from src import mpu
-from src.arguments import get_args
-from src.fp16 import FP16_Module
-from src.model import DistributedDataParallel as DDP
-from src.model import GPT3Model
-from pretrain_gpt3 import generate
-from pretrain_gpt3 import initialize_distributed
-from pretrain_gpt3 import set_random_seed
-from src.utils import Timers
-from src.utils import export_to_huggingface_model
-from src.utils import print_rank_0, load_checkpoint, DEEPSPEED_WRAP
+from ru_gpts.src import mpu
+from ru_gpts.src.arguments import get_args
+from ru_gpts.src.fp16 import FP16_Module
+from ru_gpts.src.model import DistributedDataParallel as DDP
+from ru_gpts.src.model import GPT3Model
+from ru_gpts.pretrain_gpt3 import generate
+from ru_gpts.pretrain_gpt3 import initialize_distributed
+from ru_gpts.pretrain_gpt3 import set_random_seed
+from ru_gpts.src.utils import Timers
+from ru_gpts.src.utils import export_to_huggingface_model
+from ru_gpts.src.utils import print_rank_0, load_checkpoint, DEEPSPEED_WRAP
 
 
 def get_model(args):
@@ -72,20 +72,9 @@ def setup_model(args):
     """Setup model and optimizer."""
 
     model = get_model(args)
-    if DEEPSPEED_WRAP and args.deepspeed:
-        print_rank_0("DeepSpeed is enabled.")
-
-        model, optimizer, _, lr_scheduler = DEEPSPEED_WRAP.deepspeed.initialize(
-            model=model,
-            optimizer=None,
-            args=args,
-            lr_scheduler=None,
-            mpu=mpu,
-            dist_init_required=False
-        )
 
     print("Load checkpoint from " + args.load)
-    _ = load_checkpoint(model, None, None, args, deepspeed=DEEPSPEED_WRAP and args.deepspeed)
+    _ = load_checkpoint(model, None, None, args)
     model.eval()
     print("Loaded")
     if args.export_huggingface is not None:
@@ -180,6 +169,8 @@ def main():
 
     # Arguments.
     args = get_args()
+
+    print(args)
 
     # Pytorch distributed.
     initialize_distributed(args)
