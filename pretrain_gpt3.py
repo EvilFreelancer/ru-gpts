@@ -48,7 +48,7 @@ USE_TORCH_DDP = False
 if USE_TORCH_DDP:
     from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 else:
-    from src.model import DistributedDataParallel as DDP
+    from ru_gpts.src.model import DistributedDataParallel as DDP
 
 
 def get_model(args):
