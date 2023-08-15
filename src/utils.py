@@ -464,8 +464,8 @@ def load_huggingface_model(model, path, double_pos_embeddings):
     while isinstance(model2fill, (torchDDP, FP16_Module)):
         model2fill = model2fill.module
     
-    if path == "sberbank-ai/rugpt3xl":
-        weights_path, _ = download_model_files("sberbank-ai/rugpt3xl")
+    if path == "ai-forever/rugpt3xl":
+        weights_path, _ = download_model_files("ai-forever/rugpt3xl")
         checkpoint = torch.load(weights_path, map_location=lambda storage, loc: storage)['module']
         model2fill.load_state_dict(checkpoint)
     else:
