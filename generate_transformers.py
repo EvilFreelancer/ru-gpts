@@ -39,7 +39,6 @@ from transformers import (
     XLNetTokenizer,
 )
 
-
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s", datefmt="%m/%d/%Y %H:%M:%S", level=logging.INFO,
 )
@@ -186,7 +185,14 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
     parser.add_argument("--no_cuda", action="store_true", help="Avoid using CUDA when available")
     parser.add_argument("--num_return_sequences", type=int, default=1, help="The number of samples to generate.")
+    parser.add_argument("--device_map", type=str, default='auto', help="Mapping to devices")
+    parser.add_argument("--load_in_8bit", action='store_true', help="8bit quantization on the fly")
+    parser.add_argument("--load_in_4bit", action='store_true', help="4bit quantization on the fly")
     args = parser.parse_args()
+
+    if args.load_in_8bit is True and args.load_in_4bit is True:
+        raise KeyError(f"Not possible to load model {args.model_name_or_path} in 8bit and 4bit quantization mode at "
+                       f"the same time, use one of them.")
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
@@ -201,8 +207,12 @@ def main():
         raise KeyError("the model {} you specified is not supported. You are welcome to add it and open a PR :)")
 
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
-    model = model_class.from_pretrained(args.model_name_or_path)
-    model.to(args.device)
+    model = model_class.from_pretrained(
+        args.model_name_or_path,
+        device_map=args.device_map,
+        load_in_8bit=args.load_in_8bit,
+        load_in_4bit=args.load_in_4bit,
+    )
 
     args.length = adjust_length_to_model(args.length, max_sequence_length=model.config.max_position_embeddings)
     logger.info(args)
